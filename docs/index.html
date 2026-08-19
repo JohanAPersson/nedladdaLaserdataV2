@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ladda ned laserdata</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+<style>
+:root{
+  --granit:#12161A; --ink:#1A1F24;
+  --paper:#F2F1EC; --paper-2:#E5E3DA; --line:#CFCDC2;
+  --lav:#6E7F63; --signal:#C0356B; --signal-soft:rgba(192,53,107,.14);
+  --muted:#6E7168; --warn:#8A5A12;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --display:"Space Grotesk","Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--granit);color:var(--ink);
+  font-family:var(--display);font-size:15.5px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+
+.app{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+
+.topbar{flex:0 0 auto;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+  padding:11px 18px;background:var(--granit);color:var(--paper);border-bottom:1px solid #000}
+.topbar h1{margin:0;font-size:15px;font-weight:700}
+.topbar .sub{font-family:var(--mono);font-size:11px;letter-spacing:.05em;
+  text-transform:uppercase;color:#8D958C}
+.topbar .spacer{flex:1}
+.topbar a{color:#8D958C;font-family:var(--mono);font-size:11px}
+
+.main{flex:1 1 auto;display:flex;min-height:0}
+#map{flex:1 1 auto;min-width:0;background:#1D242B;cursor:pointer}
+.leaflet-tile{filter:saturate(.45) contrast(.9) brightness(1.03)}
+.leaflet-container{font-family:var(--mono);font-size:11px}
+
+.panel{flex:0 0 380px;display:flex;flex-direction:column;background:var(--paper);
+  border-left:1px solid #000;overflow-y:auto;overscroll-behavior:contain}
+@media (max-width:860px){
+  .main{flex-direction:column}
+  #map{flex:0 0 44dvh}
+  .panel{flex:1 1 auto;border-left:none;border-top:1px solid #000}
+}
+
+.sec{padding:16px 18px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 10px;display:flex;align-items:center;gap:8px}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--line)}
+.hint{font-size:13px;color:var(--muted);margin:8px 0 0;line-height:1.5}
+.hint b{color:var(--ink);font-weight:500}
+
+.lead{margin:0;font-size:15.5px}
+.lead b{font-weight:700}
+
+.btn{appearance:none;cursor:pointer;background:transparent;border:1px solid var(--ink);
+  border-radius:0;padding:8px 12px;font-size:13.5px;font-weight:500;
+  transition:background .12s,color .12s}
+.btn:hover{background:var(--ink);color:var(--paper)}
+.btn:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+.btn[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.btn.ghost{border-color:var(--line);color:var(--muted)}
+.btn.ghost:hover{background:var(--paper-2);color:var(--ink)}
+.btnrow{display:flex;gap:6px;flex-wrap:wrap}
+
+.cta{display:block;width:100%;text-align:center;text-decoration:none;
+  background:var(--signal);border:1px solid var(--signal);color:#fff;font-weight:700;
+  padding:13px;font-size:15px;cursor:pointer}
+.cta:hover{background:#A32B59;border-color:#A32B59}
+.cta:disabled{background:var(--paper-2);border-color:var(--line);
+  color:var(--muted);cursor:not-allowed}
+
+.tally{display:flex;align-items:flex-end;gap:14px;padding:14px 18px;
+  background:var(--ink);color:var(--paper)}
+.tally .num{font-family:var(--mono);font-weight:600;font-size:36px;line-height:.9;letter-spacing:-.03em}
+.tally .num small{font-size:13px;font-weight:400;letter-spacing:0;color:#9AA096}
+.tally .split{width:1px;align-self:stretch;background:#39413A}
+.tally .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:#9AA096;margin-bottom:4px;display:block}
+
+ul.tiles{list-style:none;margin:0;padding:0}
+ul.tiles li{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:9px 0;
+  border-bottom:1px solid var(--line)}
+ul.tiles li:last-child{border-bottom:none}
+ul.tiles .id{font-family:var(--mono);font-size:13px;font-weight:500;flex:1 1 auto;min-width:0}
+ul.tiles .id em{display:block;font-style:normal;font-family:var(--display);
+  font-size:11.5px;color:var(--muted);margin-top:1px}
+ul.tiles .sz{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap}
+ul.tiles a.dl{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  text-decoration:none;border:1px solid var(--ink);padding:5px 8px;white-space:nowrap}
+ul.tiles a.dl:hover{background:var(--ink);color:var(--paper)}
+ul.tiles button.x{appearance:none;background:none;border:none;cursor:pointer;
+  color:var(--muted);font-size:17px;line-height:1;padding:2px 4px}
+ul.tiles button.x:hover{color:var(--signal)}
+ul.tiles .filelist{width:100%;display:flex;flex-direction:column;gap:6px;
+  margin:2px 0 0;padding:8px 0 0;border-top:1px dashed var(--line)}
+ul.tiles .filerow{display:flex;align-items:center;gap:10px}
+ul.tiles .filerow .fsz{flex:1 1 auto;font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+
+.msg{font-size:13px;line-height:1.5;padding:10px 12px;border-left:3px solid var(--muted);
+  background:var(--paper-2)}
+.msg.err{border-left-color:var(--signal);background:var(--signal-soft)}
+.msg.warn{border-left-color:var(--warn);background:#F4EDDF}
+.msg.ok{border-left-color:var(--lav);background:#E9EEE5}
+.msg b{font-weight:600}
+
+.empty{font-size:13.5px;color:var(--muted);border:1px dashed var(--line);
+  padding:20px 16px;text-align:center;line-height:1.6}
+
+.gridlabel{font-family:var(--mono);font-size:10px;font-weight:500;color:rgba(18,22,26,.5);
+  white-space:nowrap;pointer-events:none;text-shadow:0 0 3px rgba(255,255,255,.9)}
+.leaflet-div-icon.gridlabel{background:none;border:none}
+
+details.fold summary{cursor:pointer;font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted)}
+details.fold summary:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+details.fold[open] summary{margin-bottom:10px;color:var(--ink)}
+pre.out{margin:0;max-height:240px;overflow:auto;background:var(--ink);color:#DDE0D8;
+  padding:12px;font-family:var(--mono);font-size:11.5px;line-height:1.5;white-space:pre}
+
+.steps{counter-reset:s;list-style:none;margin:0;padding:0;font-size:13.5px}
+.steps li{counter-increment:s;position:relative;padding-left:26px;margin-bottom:9px;line-height:1.5}
+.steps li::before{content:counter(s);position:absolute;left:0;top:1px;
+  font-family:var(--mono);font-size:11px;font-weight:600;color:var(--signal);
+  border:1px solid var(--signal);width:18px;height:18px;display:grid;place-items:center}
+
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <h1>Ladda ned laserdata</h1>
+    <span class="sub">Lantmäteriet · Laserdata skog</span>
+    <span class="spacer"></span>
+    <a href="https://geotorget.lantmateriet.se/geodataprodukter/laserdata-nedladdning-skog-api?view=oversikt" target="_blank" rel="noopener">Beställ behörighet ↗</a>
+  </header>
+
+  <div class="main">
+    <div id="map"></div>
+
+    <aside class="panel">
+
+      <section class="sec">
+        <p class="lead"><b>Klicka på kartan</b> där du vill kartera. Varje klick väljer rutan du pekar på. Klicka igen för att ta bort den.</p>
+        <div class="btnrow" style="margin-top:12px">
+          <button class="btn" id="tool-drag" aria-pressed="false">Markera flera</button>
+          <button class="btn ghost" id="tool-clear">Börja om</button>
+        </div>
+        <p class="hint" id="tip">Zooma in så syns rutnätet. Varje ruta är 10 × 10 km.</p>
+      </section>
+
+      <div id="tallywrap" hidden>
+        <div class="tally">
+          <div><span class="lbl">Valda rutor</span><div class="num" id="tallyCount">0</div></div>
+          <div class="split"></div>
+          <div><span class="lbl">Att ladda ned</span><div class="num" id="tallySize">0<small> GB</small></div></div>
+        </div>
+      </div>
+
+      <section class="sec">
+        <p class="eyebrow">Dina rutor</p>
+        <div id="list"><div class="empty">Inget valt än.<br>Klicka på kartan för att börja.</div></div>
+        <div id="volwarn" style="margin-top:12px"></div>
+      </section>
+
+      <section class="sec" id="dlsec" hidden>
+        <p class="eyebrow">Ladda ned</p>
+        <button class="cta" id="dlall">Ladda ned alla filer</button>
+        <ol class="steps" style="margin-top:14px">
+          <li>Första filen får webbläsaren att fråga efter <b>användarnamn och lösenord</b>. Använd uppgifterna för ditt systemkonto i Geotorget.</li>
+          <li>Fyll i en gång — resten av filerna går igenom automatiskt.</li>
+          <li>Filerna hamnar där webbläsaren normalt sparar hämtade filer. En ruta är ofta över 1 GB, så det tar en stund. Innehåller en ruta flera filer laddas alla ned.</li>
+        </ol>
+        <p class="hint">Har du inget systemkonto ännu? Beställ först produkten <b>Laserdata Nedladdning, skog</b> i Geotorget och skapa ett systemkonto där.</p>
+      </section>
+
+      <section class="sec">
+        <p class="eyebrow">Är området skannat?</p>
+        <p class="hint" style="margin-top:0">Ungefär en fjärdedel av Sverige saknar laserdata — fjällkedjan ingår inte. Finns ingen ruta där du klickar är området antingen inte skannat, eller ännu inte publicerat.</p>
+        <a class="btn ghost" href="https://webgisportal2.lantmateriet.se/portal/apps/experiencebuilder/experience/?id=25679ae1c6604a04949fa49460329f3d" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;margin-top:8px">Öppna Lantmäteriets statuskarta ↗</a>
+      </section>
+
+      <section class="sec">
+        <details class="fold">
+          <summary>Öppna filerna i QGIS</summary>
+          <p class="hint" style="margin-top:0">Dra den nedladdade <b>.copc.laz</b>-filen rakt in i QGIS-fönstret. Den öppnas direkt utan väntetid, till skillnad från vanliga LAZ-filer.</p>
+          <p class="hint">Koordinatsystemet är <b>SWEREF 99 TM</b> i planet och <b>RH 2000</b> i höjd. Sätt projektet till EPSG:3006 så ligger allt rätt.</p>
+          <p class="hint">Har du många rutor — eller flera filer inom samma ruta: <b>Bearbetning → Point cloud data management → Build virtual point cloud</b> gör dem till ett enda lager.</p>
+        </details>
+      </section>
+
+      <section class="sec">
+        <details class="fold">
+          <summary>Länklista och avancerat</summary>
+          <p class="hint" style="margin-top:0">Kopiera länkarna om du vill hämta filerna med ett annat verktyg, till exempel <span style="font-family:var(--mono)">curl -u anvandare:losenord -O -C -</span> eller en nedladdningshanterare.</p>
+          <pre class="out" id="urlbox">—</pre>
+          <button class="btn ghost" id="copy" style="margin-top:8px">Kopiera länkarna</button>
+          <div id="srcmsg" style="margin-top:12px"></div>
+        </details>
+      </section>
+
+    </aside>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js"></script>
+
+<script>
+(function () {
+"use strict";
+
+/* ══════════════════════════════════════════════════════════════════════
+   Rutindex
+
+   Sidan använder i första hand en färdig indexfil i repot:
+       data/rutor.json
+   Byggs med bygg-index.py. Då krävs inga API-anrop från webbläsaren,
+   vilket gör sidan snabb och oberoende av CORS och inloggning.
+
+   Saknas filen faller sidan tillbaka på att fråga API:et direkt.
+
+   OBS: en 10x10 km ruta kan innehålla FLERA STAC-objekt/filer — inte
+   bara flera skanningstillfällen (olika datum) utan ibland flera filer
+   från samma skanningstillfälle (samma datum, olika "o"-prefix). Därför
+   grupperas filer per ruta på det senaste datumet, och ALLA filer med
+   det datumet tas med — inte bara en av dem.
+   ══════════════════════════════════════════════════════════════════════ */
+var INDEX_URL = "data/rutor.json";
+var API       = "https://api.lantmateriet.se/stac-hojd/v1";
+var COLL      = "dsm-skoglig-copc";
+var DL_BASE   = "https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/";
+var CELL      = 10000;
+var EST_BYTES = 1.7e9;
+
+proj4.defs("EPSG:3006",
+  "+proj=utm +zone=33 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+var toSweref = proj4("EPSG:4326", "EPSG:3006");
+var toWgs    = proj4("EPSG:3006", "EPSG:4326");
+
+var index    = null;    // { "627_57": [{o,d,s}, ...] }
+var source   = "none";  // "index" | "api"
+var chosen   = {};      // nyckel -> { key, entries:[{o,d,s},...], older }
+var dragMode = false;
+
+/* ── karta ──────────────────────────────────────────────────────────── */
+var map = L.map("map", { zoomControl:true, minZoom:4 }).setView([59.276, 18.002], 9);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom:19, attribution:"© OpenStreetMap" }).addTo(map);
+
+var gridLayer = L.layerGroup().addTo(map);
+var pickLayer = L.layerGroup().addTo(map);
+var dragLayer = L.layerGroup().addTo(map);
+
+function cellRing(e0, n0) {
+  var pts = [], i, S = 4;
+  for (i = 0; i <= S; i++) pts.push([e0 + CELL*i/S, n0]);
+  for (i = 1; i <= S; i++) pts.push([e0 + CELL, n0 + CELL*i/S]);
+  for (i = 1; i <= S; i++) pts.push([e0 + CELL - CELL*i/S, n0 + CELL]);
+  for (i = 1; i <= S; i++) pts.push([e0, n0 + CELL - CELL*i/S]);
+  return pts.map(function (p) { var c = toWgs.forward(p); return [c[1], c[0]]; });
+}
+function keyOf(e, n) { return (n / CELL) + "_" + (e / CELL); }
+function originOf(key) {
+  var p = key.split("_");
+  return [ +p[1] * CELL, +p[0] * CELL ];
+}
+function cellAt(latlng) {
+  var s = toSweref.forward([latlng.lng, latlng.lat]);
+  return keyOf(Math.floor(s[0] / CELL) * CELL, Math.floor(s[1] / CELL) * CELL);
+}
+function cellsInBounds(b) {
+  var cs = [[b.getWest(),b.getSouth()],[b.getEast(),b.getSouth()],
+            [b.getEast(),b.getNorth()],[b.getWest(),b.getNorth()]]
+             .map(function (c) { return toSweref.forward(c); });
+  var es = cs.map(function (c) { return c[0]; }), ns = cs.map(function (c) { return c[1]; });
+  var e0 = Math.floor(Math.min.apply(null,es)/CELL)*CELL, e1 = Math.ceil(Math.max.apply(null,es)/CELL)*CELL;
+  var n0 = Math.floor(Math.min.apply(null,ns)/CELL)*CELL, n1 = Math.ceil(Math.max.apply(null,ns)/CELL)*CELL;
+  var out = [];
+  for (var n = n0; n < n1; n += CELL)
+    for (var e = e0; e < e1; e += CELL) out.push([e, n]);
+  return out;
+}
+
+function drawGrid() {
+  gridLayer.clearLayers();
+  if (map.getZoom() < 8) return;
+  var cells = cellsInBounds(map.getBounds());
+  if (cells.length > 400) return;
+  var label = cells.length <= 48;
+
+  cells.forEach(function (c) {
+    var key = keyOf(c[0], c[1]);
+    var has = index ? !!index[key] : true;
+    L.polygon(cellRing(c[0], c[1]), {
+      color: "#12161A", weight: has ? 0.8 : 0.5, opacity: has ? 0.35 : 0.15,
+      fill: !!(index && has), fillColor: "#6E7F63", fillOpacity: 0.05,
+      dashArray: has ? "2 4" : "1 5", interactive: false
+    }).addTo(gridLayer);
+
+    if (label && has) {
+      var m = toWgs.forward([c[0] + CELL/2, c[1] + CELL/2]);
+      L.marker([m[1], m[0]], { interactive:false, icon: L.divIcon({
+        className:"gridlabel", html:key, iconSize:[58,12], iconAnchor:[29,6]
+      })}).addTo(gridLayer);
+    }
+  });
+}
+map.on("moveend zoomend", drawGrid);
+
+function note(kind, html) {
+  document.getElementById("srcmsg").innerHTML =
+    '<div class="msg ' + kind + '">' + html + "</div>";
+}
+function tip(html) { document.getElementById("tip").innerHTML = html; }
+function tipReset() { tip("Zooma in så syns rutnätet. Varje ruta är 10 × 10 km."); }
+
+/* ── ladda index ────────────────────────────────────────────────────── */
+fetch(INDEX_URL, { cache: "no-cache" })
+  .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(function (j) {
+    index  = j.rutor || j;
+    source = "index";
+    note("ok", "Rutlistan i repot är uppdaterad <b>" + (j.uppdaterad || "okänt datum") +
+               "</b> och innehåller " + Object.keys(index).length +
+               " rutor. Sidan gör inga anrop till Lantmäteriet förrän du hämtar en fil.");
+    drawGrid();
+  })
+  .catch(function () {
+    source = "api";
+    note("warn", "<b>Ingen färdig rutlista i repot.</b> Sidan frågar Lantmäteriets API " +
+                 "direkt i stället, vilket kan misslyckas beroende på hur servern svarar. " +
+                 "Bygg <span style='font-family:var(--mono)'>data/rutor.json</span> med " +
+                 "bygg-index.py för att göra sidan oberoende av det.");
+    drawGrid();
+  });
+
+/* ── slå upp filnamn ────────────────────────────────────────────────── */
+/*
+   Väljer ut ALLA filer som hör till den senaste skanningen i en ruta —
+   inte bara en. Flera STAC-objekt kan dela samma (senaste) datum inom
+   samma 10x10 km-ruta, t.ex. om rutan råkar ligga i skarven mellan två
+   faktiska leveranstilar. Tidigare kod sorterade och plockade bara det
+   sista elementet, vilket tystade bort de andra filerna helt.
+*/
+function newestGroup(entries) {
+  var maxDate = entries.reduce(function (m, e) {
+    var d = String(e.d || "");
+    return d > m ? d : m;
+  }, "");
+  var group = entries.filter(function (e) { return String(e.d || "") === maxDate; });
+
+  // Skydd mot att exakt samma fil (samma organisation + datum) råkar
+  // förekomma dubbelt i indexet/API-svaret.
+  var seen = {}, out = [];
+  group.forEach(function (e) {
+    var dedupeKey = e.o + "|" + e.d;
+    if (!seen[dedupeKey]) { seen[dedupeKey] = true; out.push(e); }
+  });
+  return out;
+}
+
+async function resolve(keys) {
+  if (source === "index") {
+    var hits = [], miss = [];
+    keys.forEach(function (k) {
+      if (index[k] && index[k].length) {
+        var group = newestGroup(index[k]);
+        hits.push({ key:k, entries:group, older: index[k].length - group.length });
+      } else miss.push(k);
+    });
+    return { hits: hits, miss: miss };
+  }
+
+  var polys = keys.map(function (k) {
+    var o = originOf(k);
+    var ring = cellRing(o[0], o[1]).map(function (ll) { return [ll[1], ll[0]]; });
+    ring.push(ring[0]);
+    return [ring];
+  });
+
+  var res = await fetch(API + "/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      collections: [COLL],
+      intersects: { type:"MultiPolygon", coordinates: polys },
+      limit: 500
+    })
+  });
+  if (!res.ok) throw new Error("servern svarade " + res.status);
+  var json = await res.json();
+
+  var byKey = {};
+  (json.features || []).forEach(function (f) {
+    var m = /^([0-9a-z]+)-(\d+_\d+)$/i.exec(f.id);
+    if (!m) return;
+    (byKey[m[2]] = byKey[m[2]] || []).push({
+      o: m[1].toLowerCase(),
+      d: String((f.properties && f.properties.datetime) || "").slice(0, 10),
+      s: (f.assets && f.assets.data && f.assets.data["file:size"]) || 0
+    });
+  });
+
+  var h = [], ms = [];
+  keys.forEach(function (k) {
+    if (byKey[k]) {
+      var group = newestGroup(byKey[k]);
+      h.push({ key:k, entries:group, older: byKey[k].length - group.length });
+    } else ms.push(k);
+  });
+  return { hits: h, miss: ms };
+}
+
+function hrefFor(key, entry) {
+  return DL_BASE + entry.o + "/m" + entry.o + "-" + key + ".copc.laz";
+}
+
+// Totalt antal bytes för en ruta. Om ingen fil har känd storlek används
+// EST_BYTES som en grov skattning för hela rutan (inte per fil).
+function keyBytes(c) {
+  var sum = c.entries.reduce(function (s, e) { return s + (e.s || 0); }, 0);
+  return sum > 0 ? sum : EST_BYTES;
+}
+
+function flash(key, color) {
+  var o = originOf(key);
+  var l = L.polygon(cellRing(o[0], o[1]), {
+    color: color, weight: 2, fillColor: color, fillOpacity: 0.2
+  }).addTo(map);
+  setTimeout(function () { map.removeLayer(l); }, 1100);
+}
+
+/* ── klicka för att välja ───────────────────────────────────────────── */
+async function toggle(key) {
+  if (chosen[key]) { delete chosen[key]; render(); return; }
+
+  tip("Slår upp filnamnet …");
+  try {
+    var r = await resolve([key]);
+    if (!r.hits.length) {
+      tip("Ruta <b>" + key + "</b> har ingen laserdata. Området är inte skannat, " +
+          "eller ännu inte publicerat.");
+      flash(key, "#8A8A80");
+      return;
+    }
+    chosen[key] = r.hits[0];
+    tipReset();
+    render();
+  } catch (e) {
+    tip("Kunde inte slå upp filnamnet: " + e.message +
+        ". Se <b>Länklista och avancerat</b> längst ner.");
+  }
+}
+
+map.on("click", function (e) {
+  if (dragMode) return;
+  toggle(cellAt(e.latlng));
+});
+
+/* ── markera flera genom att dra ────────────────────────────────────── */
+var dBtn = document.getElementById("tool-drag");
+dBtn.onclick = function () {
+  dragMode = !dragMode;
+  dBtn.setAttribute("aria-pressed", dragMode);
+  map.dragging[dragMode ? "disable" : "enable"]();
+  if (dragMode) tip("Dra över kartan för att välja alla rutor inom området.");
+  else tipReset();
+};
+
+var dStart = null, dBox = null;
+map.on("mousedown", function (e) { if (dragMode) dStart = e.latlng; });
+map.on("mousemove", function (e) {
+  if (!dragMode || !dStart) return;
+  if (dBox) dragLayer.removeLayer(dBox);
+  dBox = L.rectangle(L.latLngBounds(dStart, e.latlng), {
+    color:"#C0356B", weight:1.5, dashArray:"4 3", fillOpacity:0.06
+  }).addTo(dragLayer);
+});
+map.on("mouseup", async function (e) {
+  if (!dragMode || !dStart) return;
+  var b = L.latLngBounds(dStart, e.latlng);
+  dStart = null; dBox = null; dragLayer.clearLayers();
+  if (b.getNorth() - b.getSouth() < 1e-5) return;
+
+  var keys = cellsInBounds(b).map(function (c) { return keyOf(c[0], c[1]); });
+  if (keys.length > 120) {
+    tip("Det området rymmer <b>" + keys.length + " rutor</b>, ungefär " +
+        Math.round(keys.length * 1.7) + " GB. Välj ett mindre område.");
+    return;
+  }
+
+  tip("Slår upp filnamn för " + keys.length + " rutor …");
+  try {
+    var r = await resolve(keys);
+    r.hits.forEach(function (h) { chosen[h.key] = h; });
+    tip(r.miss.length
+      ? "<b>" + r.hits.length + "</b> rutor tillagda. " + r.miss.length +
+        " av rutorna i området saknar laserdata."
+      : "<b>" + r.hits.length + "</b> rutor tillagda.");
+    render();
+  } catch (err) {
+    tip("Kunde inte slå upp filnamnen: " + err.message + ".");
+  }
+});
+
+document.getElementById("tool-clear").onclick = function () {
+  chosen = {};
+  render();
+  tipReset();
+};
+
+/* ── presentation ───────────────────────────────────────────────────── */
+function fmt(n, d) {
+  return n.toLocaleString("sv-SE", { minimumFractionDigits:d||0, maximumFractionDigits:d||0 });
+}
+
+function render() {
+  var keys = Object.keys(chosen).sort();
+  var anyReal = keys.some(function (k) {
+    return chosen[k].entries.some(function (e) { return e.s > 0; });
+  });
+  var est = keys.length > 0 && !anyReal;
+  var total = keys.reduce(function (s, k) { return s + keyBytes(chosen[k]); }, 0);
+  var gbTot = total / 1e9;
+  var fileCount = keys.reduce(function (s, k) { return s + chosen[k].entries.length; }, 0);
+
+  document.getElementById("tallywrap").hidden = !keys.length;
+  document.getElementById("tallyCount").textContent = keys.length;
+  document.getElementById("tallySize").innerHTML =
+    (est ? "≈" : "") + fmt(gbTot, gbTot < 10 ? 1 : 0) + "<small> GB</small>";
+
+  pickLayer.clearLayers();
+  keys.forEach(function (k) {
+    var o = originOf(k);
+    L.polygon(cellRing(o[0], o[1]), {
+      color:"#C0356B", weight:1.5, fillColor:"#C0356B", fillOpacity:0.22
+    }).addTo(pickLayer).bindTooltip(k, { direction:"center", className:"gridlabel" });
+  });
+
+  var box = document.getElementById("list");
+  if (!keys.length) {
+    box.innerHTML = '<div class="empty">Inget valt än.<br>Klicka på kartan för att börja.</div>';
+    document.getElementById("dlsec").hidden = true;
+    document.getElementById("volwarn").innerHTML = "";
+    document.getElementById("urlbox").textContent = "—";
+    return;
+  }
+
+  box.innerHTML = "<ul class='tiles'>" + keys.map(function (k) {
+    var c = chosen[k];
+    var multi = c.entries.length > 1;
+    var totalSize = keyBytes(c);
+
+    var meta = (c.entries[0].d || "okänt datum") +
+      (multi ? " · " + c.entries.length + " filer i denna ruta" : "") +
+      (c.older ? " · " + c.older + " äldre skanning" + (c.older > 1 ? "ar" : "") +
+        " dold" + (c.older > 1 ? "a" : "") : "");
+
+    var head =
+      "<span class='id'>" + k + "<em>" + meta + "</em></span>" +
+      "<span class='sz'>" + (totalSize ? fmt(totalSize/1e9, 2) + " GB" : "≈1,7 GB") + "</span>" +
+      (multi ? "" :
+        "<a class='dl' href='" + hrefFor(k, c.entries[0]) + "' target='_blank' rel='noopener'>Hämta</a>") +
+      "<button class='x' data-k='" + k + "' title='Ta bort rutan (alla filer)'>×</button>";
+
+    var fileList = multi
+      ? "<div class='filelist'>" + c.entries.map(function (e) {
+          return "<div class='filerow'>" +
+            "<span class='fsz'>" + (e.s ? fmt(e.s/1e9, 2) + " GB" : "≈okänd storlek") + "</span>" +
+            "<a class='dl' href='" + hrefFor(k, e) + "' target='_blank' rel='noopener'>Hämta (" + e.o + ")</a>" +
+          "</div>";
+        }).join("") + "</div>"
+      : "";
+
+    return "<li>" + head + fileList + "</li>";
+  }).join("") + "</ul>";
+
+  Array.prototype.forEach.call(box.querySelectorAll("button.x"), function (b) {
+    b.onclick = function () { delete chosen[b.dataset.k]; render(); };
+  });
+
+  document.getElementById("volwarn").innerHTML = gbTot > 20
+    ? '<div class="msg warn"><b>' + fmt(gbTot, 0) + " GB är mycket data.</b> " +
+      "Kontrollera att du har plats på disken, och räkna med att nedladdningen tar " +
+      "timmar snarare än minuter.</div>"
+    : "";
+
+  document.getElementById("dlsec").hidden = false;
+  document.getElementById("dlall").textContent =
+    "Ladda ned alla filer" + (fileCount > keys.length ? " (" + fileCount + " st)" : "");
+  document.getElementById("urlbox").textContent =
+    keys.reduce(function (lines, k) {
+      chosen[k].entries.forEach(function (e) { lines.push(hrefFor(k, e)); });
+      return lines;
+    }, []).join("\n");
+}
+
+/* ── ladda ned allt ─────────────────────────────────────────────────── */
+document.getElementById("dlall").onclick = function () {
+  var keys = Object.keys(chosen).sort();
+  if (!keys.length) return;
+
+  var files = [];
+  keys.forEach(function (k) {
+    chosen[k].entries.forEach(function (e) { files.push({ key:k, entry:e }); });
+  });
+  if (!files.length) return;
+
+  var btn = this;
+  btn.disabled = true;
+
+  files.forEach(function (f, i) {
+    setTimeout(function () {
+      var a = document.createElement("a");
+      a.href = hrefFor(f.key, f.entry);
+      a.target = "_blank";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      btn.textContent = "Startar " + (i + 1) + " av " + files.length + " …";
+      if (i === files.length - 1) {
+        setTimeout(function () {
+          btn.disabled = false;
+          render();
+        }, 2500);
+      }
+    }, i * 2000);
+  });
+};
+
+document.getElementById("copy").onclick = function () {
+  var btn = this;
+  navigator.clipboard.writeText(document.getElementById("urlbox").textContent)
+    .then(function () {
+      btn.textContent = "Kopierat";
+      setTimeout(function () { btn.textContent = "Kopiera länkarna"; }, 1600);
+    }, function () {
+      btn.textContent = "Markera texten och kopiera själv";
+    });
+};
+
+drawGrid();
+render();
+
+})();
+</script>
+</body>
+</html>
