@@ -345,27 +345,89 @@ fetch(INDEX_URL, { cache: "no-cache" })
 
 /* ── slå upp filnamn ────────────────────────────────────────────────── */
 /*
-   Väljer ut ALLA filer som hör till den senaste skanningen i en ruta —
-   inte bara en. Flera STAC-objekt kan dela samma (senaste) datum inom
-   samma 10x10 km-ruta, t.ex. om rutan råkar ligga i skarven mellan två
-   faktiska leveranstilar. Tidigare kod sorterade och plockade bara det
-   sista elementet, vilket tystade bort de andra filerna helt.
-*/
-function newestGroup(entries) {
-  var maxDate = entries.reduce(function (m, e) {
-    var d = String(e.d || "");
-    return d > m ? d : m;
-  }, "");
-  var group = entries.filter(function (e) { return String(e.d || "") === maxDate; });
+   Väljer ut de filer som behövs för att täcka en 10x10 km-ruta så
+   fullständigt som möjligt. En ruta kan behöva:
+     - bara den senaste filen (vanligast)
+     - filer från FLERA olika datum, t.ex. tre tiles från samma
+       flygsäsong tagna olika dagar, som tillsammans bildar en
+       komplett ruta
+     - även efter att ha kombinerat all tillgänglig data kan ett glapp
+       kvarstå — då ligger rutan sannolikt delvis utanför det som
+       faktiskt skannas (fjällkedjan, riksgränsen), och inget mer data
+       kommer fylla det.
 
-  // Skydd mot att exakt samma fil (samma organisation + datum) råkar
-  // förekomma dubbelt i indexet/API-svaret.
-  var seen = {}, out = [];
-  group.forEach(function (e) {
-    var dedupeKey = e.o + "|" + e.d;
-    if (!seen[dedupeKey]) { seen[dedupeKey] = true; out.push(e); }
+   Algoritmen går igenom datum nyast till äldst och tar bara med ett
+   datums filer om det FAKTISKT minskar glappet mot rutans nominella
+   kant — annars vore det en onödig extra nedladdning. Samma logik som
+   verifierats mot skarpa data i bygg-index.py.
+*/
+var TOLERANCE_M = 50;   // meter — matchar TOLERANCE_M i bygg-index.py
+
+function mergeBbox(a, b) {
+  if (!a) return b.slice();
+  return [
+    Math.min(a[0], b[0]), Math.min(a[1], b[1]),
+    Math.max(a[2], b[2]), Math.max(a[3], b[3])
+  ];
+}
+
+function gapsInMeters(union, cell) {
+  if (!union) return { max: Infinity };
+  var midLat = (cell[1] + cell[3]) / 2;
+  var mPerDegLat = 111320;
+  var mPerDegLon = 111320 * Math.cos(midLat * Math.PI / 180);
+  var vast = Math.max(0, (union[0] - cell[0]) * mPerDegLon);
+  var ost  = Math.max(0, (cell[2] - union[2]) * mPerDegLon);
+  var syd  = Math.max(0, (union[1] - cell[1]) * mPerDegLat);
+  var nord = Math.max(0, (cell[3] - union[3]) * mPerDegLat);
+  return { vast:vast, ost:ost, syd:syd, nord:nord, max: Math.max(vast, ost, syd, nord) };
+}
+
+function cellBoundsWgs84(key) {
+  var o = originOf(key);
+  var e0 = o[0], n0 = o[1], e1 = e0 + CELL, n1 = n0 + CELL;
+  var corners = [[e0,n0],[e1,n0],[e1,n1],[e0,n1]].map(function (c) {
+    return toWgs.forward(c);
   });
-  return out;
+  var lons = corners.map(function (c) { return c[0]; });
+  var lats = corners.map(function (c) { return c[1]; });
+  return [Math.min.apply(null,lons), Math.min.apply(null,lats),
+          Math.max.apply(null,lons), Math.max.apply(null,lats)];
+}
+
+function buildCoverage(entries, cellBbox) {
+  var dates = [];
+  entries.forEach(function (e) { if (dates.indexOf(e.d) === -1) dates.push(e.d); });
+  dates.sort().reverse();
+
+  var union = null, usedFiles = [];
+  for (var i = 0; i < dates.length; i++) {
+    var group = entries.filter(function (e) { return e.d === dates[i]; })
+                        .filter(function (e) { return e.b; });
+    if (!group.length) continue;
+
+    var candidate = union;
+    group.forEach(function (e) { candidate = mergeBbox(candidate, e.b); });
+
+    var gapBefore = union ? gapsInMeters(union, cellBbox) : { max: Infinity };
+    var gapAfter = gapsInMeters(candidate, cellBbox);
+
+    if (!union || gapAfter.max < gapBefore.max - 0.5) {
+      union = candidate;
+      usedFiles = usedFiles.concat(group);
+    }
+    if (gapAfter.max <= TOLERANCE_M) break;
+  }
+
+  // Om inget objekt hade en bbox alls: fall tillbaka på den nyaste filen
+  // rakt av, hellre än att inte visa något.
+  if (!usedFiles.length) {
+    var newestDate = dates[0];
+    usedFiles = entries.filter(function (e) { return e.d === newestDate; });
+  }
+
+  var finalGap = union ? gapsInMeters(union, cellBbox) : null;
+  return { files: usedFiles, gap: finalGap };
 }
 
 async function resolve(keys) {
@@ -373,8 +435,8 @@ async function resolve(keys) {
     var hits = [], miss = [];
     keys.forEach(function (k) {
       if (index[k] && index[k].length) {
-        var group = newestGroup(index[k]);
-        hits.push({ key:k, entries:group, older: index[k].length - group.length });
+        var cov = buildCoverage(index[k], cellBoundsWgs84(k));
+        hits.push({ key:k, entries:cov.files, gap:cov.gap, older: index[k].length - cov.files.length });
       } else miss.push(k);
     });
     return { hits: hits, miss: miss };
@@ -406,15 +468,16 @@ async function resolve(keys) {
     (byKey[m[2]] = byKey[m[2]] || []).push({
       o: m[1].toLowerCase(),
       d: String((f.properties && f.properties.datetime) || "").slice(0, 10),
-      s: (f.assets && f.assets.data && f.assets.data["file:size"]) || 0
+      s: (f.assets && f.assets.data && f.assets.data["file:size"]) || 0,
+      b: (f.bbox && f.bbox.length === 4) ? f.bbox : null
     });
   });
 
   var h = [], ms = [];
   keys.forEach(function (k) {
     if (byKey[k]) {
-      var group = newestGroup(byKey[k]);
-      h.push({ key:k, entries:group, older: byKey[k].length - group.length });
+      var cov = buildCoverage(byKey[k], cellBoundsWgs84(k));
+      h.push({ key:k, entries:cov.files, gap:cov.gap, older: byKey[k].length - cov.files.length });
     } else ms.push(k);
   });
   return { hits: h, miss: ms };
@@ -453,7 +516,15 @@ async function toggle(key) {
       return;
     }
     chosen[key] = r.hits[0];
-    tipReset();
+    var g = r.hits[0].gap;
+    if (g && g.max > TOLERANCE_M) {
+      tip("Ruta <b>" + key + "</b> tillagd, men verkar inte vara helt skannad " +
+          "(saknar ungefär " + Math.round(g.max) + " m i kanten). Troligen ligger " +
+          "en del av rutan i fjällkedjan eller vid riksgränsen — kolla " +
+          "<b>Är området skannat?</b> nedan.");
+    } else {
+      tipReset();
+    }
     render();
   } catch (e) {
     tip("Kunde inte slå upp filnamnet: " + e.message +
@@ -502,10 +573,14 @@ map.on("mouseup", async function (e) {
   try {
     var r = await resolve(keys);
     r.hits.forEach(function (h) { chosen[h.key] = h; });
-    tip(r.miss.length
-      ? "<b>" + r.hits.length + "</b> rutor tillagda. " + r.miss.length +
-        " av rutorna i området saknar laserdata."
-      : "<b>" + r.hits.length + "</b> rutor tillagda.");
+    var nOfullstandig = r.hits.filter(function (h) {
+      return h.gap && h.gap.max > TOLERANCE_M;
+    }).length;
+    var msg = "<b>" + r.hits.length + "</b> rutor tillagda.";
+    if (r.miss.length) msg += " " + r.miss.length + " av rutorna i området saknar laserdata.";
+    if (nOfullstandig) msg += " " + nOfullstandig + " av dem verkar inte helt skannade " +
+      "(troligen fjällkedjan eller riksgränsen) — se varningarna i listan nedan.";
+    tip(msg);
     render();
   } catch (err) {
     tip("Kunde inte slå upp filnamnen: " + err.message + ".");
@@ -559,11 +634,12 @@ function render() {
     var c = chosen[k];
     var multi = c.entries.length > 1;
     var totalSize = keyBytes(c);
+    var incomplete = c.gap && c.gap.max > TOLERANCE_M;
 
-    var meta = (c.entries[0].d || "okänt datum") +
+    var meta = (c.entries[0] ? c.entries[0].d : "okänt datum") +
       (multi ? " · " + c.entries.length + " filer i denna ruta" : "") +
-      (c.older ? " · " + c.older + " äldre skanning" + (c.older > 1 ? "ar" : "") +
-        " dold" + (c.older > 1 ? "a" : "") : "");
+      (incomplete ? " · <span style='color:var(--warn)'>täcker inte hela rutan (~" +
+        Math.round(c.gap.max) + " m glapp)</span>" : "");
 
     var head =
       "<span class='id'>" + k + "<em>" + meta + "</em></span>" +
@@ -575,7 +651,7 @@ function render() {
     var fileList = multi
       ? "<div class='filelist'>" + c.entries.map(function (e) {
           return "<div class='filerow'>" +
-            "<span class='fsz'>" + (e.s ? fmt(e.s/1e9, 2) + " GB" : "≈okänd storlek") + "</span>" +
+            "<span class='fsz'>" + (e.s ? fmt(e.s/1e9, 2) + " GB" : "≈okänd storlek") + " · " + e.d + "</span>" +
             "<a class='dl' href='" + hrefFor(k, e) + "' target='_blank' rel='noopener'>Hämta (" + e.o + ")</a>" +
           "</div>";
         }).join("") + "</div>"
