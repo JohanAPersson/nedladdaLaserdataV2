@@ -40,3 +40,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add docs/data/rutor.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Chore: Automatisk uppdatering av rutor.json" && git push)
+
+# --- Keep-alive steg som sista steg ---
+      - name: Keepalive Workflow
+        uses: gautamkrishnar/keepalive-workflow@v2
