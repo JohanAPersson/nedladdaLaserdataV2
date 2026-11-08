@@ -131,6 +131,18 @@ pre.out{margin:0;max-height:240px;overflow:auto;background:var(--ink);color:#DDE
   border:1px solid var(--signal);width:18px;height:18px;display:grid;place-items:center}
 
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* teckenförklaring på kartan */
+.legend{background:rgba(242,241,236,.94);border:1px solid #000;padding:8px 10px;
+  font-family:var(--mono);font-size:11px;line-height:1.35;color:var(--ink)}
+.legend b{display:block;font-weight:600;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.legend .row{display:flex;align-items:center;gap:7px}
+.legend .sw{width:14px;height:11px;border:1px solid rgba(18,22,26,.35);flex:0 0 auto}
+.legend .sw.pick{background:rgba(192,53,107,.6);border:2px solid #C0356B;
+  box-shadow:0 0 0 1px #fff inset}
+ul.tiles .id{flex:1 1 0}
+.legend .sep{height:1px;background:var(--line);margin:5px 0}
 </style>
 </head>
 <body>
@@ -148,12 +160,12 @@ pre.out{margin:0;max-height:240px;overflow:auto;background:var(--ink);color:#DDE
     <aside class="panel">
 
       <section class="sec">
-        <p class="lead"><b>Klicka på kartan</b> där du vill kartera. Varje klick väljer rutan du pekar på. Klicka igen för att ta bort den.</p>
+        <p class="lead"><b>Klicka på kartan</b> där du vill kartera. Varje klick väljer en ruta på 2,5 × 2,5 km. Klicka igen för att ta bort den.</p>
         <div class="btnrow" style="margin-top:12px">
           <button class="btn" id="tool-drag" aria-pressed="false">Markera flera</button>
           <button class="btn ghost" id="tool-clear">Börja om</button>
         </div>
-        <p class="hint" id="tip">Zooma in så syns rutnätet. Varje ruta är 10 × 10 km.</p>
+        <p class="hint" id="tip"></p>
       </section>
 
       <div id="tallywrap" hidden>
@@ -176,14 +188,14 @@ pre.out{margin:0;max-height:240px;overflow:auto;background:var(--ink);color:#DDE
         <ol class="steps" style="margin-top:14px">
           <li>Första filen får webbläsaren att fråga efter <b>användarnamn och lösenord</b>. Använd uppgifterna för ditt systemkonto i Geotorget.</li>
           <li>Fyll i en gång — resten av filerna går igenom automatiskt.</li>
-          <li>Filerna hamnar där webbläsaren normalt sparar hämtade filer. Varje 10 km-ruta består av upp till 16 filer på 2,5 × 2,5 km, cirka 100 MB styck. Alla laddas ned.</li>
+          <li>Filerna hamnar där webbläsaren normalt sparar hämtade filer. Varje ruta är en fil på ungefär 100 MB.</li>
         </ol>
         <p class="hint">Har du inget systemkonto ännu? Beställ först produkten <b>Laserdata Nedladdning, skog</b> i Geotorget och skapa ett systemkonto där.</p>
       </section>
 
       <section class="sec">
         <p class="eyebrow">Är området skannat?</p>
-        <p class="hint" style="margin-top:0">Ungefär en fjärdedel av Sverige saknar laserdata — fjällkedjan ingår inte. Finns ingen ruta där du klickar är området antingen inte skannat, eller ännu inte publicerat.</p>
+        <p class="hint" style="margin-top:0">Färgade rutor har laserdata; färgen visar året för den senaste skanningen. Ungefär en fjärdedel av Sverige saknar laserdata — fjällkedjan ingår inte. Ofärgade rutor är antingen inte skannade, eller ännu inte publicerade.</p>
         <a class="btn ghost" href="https://webgisportal2.lantmateriet.se/portal/apps/experiencebuilder/experience/?id=25679ae1c6604a04949fa49460329f3d" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;margin-top:8px">Öppna Lantmäteriets statuskarta ↗</a>
       </section>
 
@@ -192,7 +204,7 @@ pre.out{margin:0;max-height:240px;overflow:auto;background:var(--ink);color:#DDE
           <summary>Öppna filerna i QGIS</summary>
           <p class="hint" style="margin-top:0">Dra den nedladdade <b>.copc.laz</b>-filen rakt in i QGIS-fönstret. Den öppnas direkt utan väntetid, till skillnad från vanliga LAZ-filer.</p>
           <p class="hint">Koordinatsystemet är <b>SWEREF 99 TM</b> i planet och <b>RH 2000</b> i höjd. Sätt projektet till EPSG:3006 så ligger allt rätt.</p>
-          <p class="hint">Varje ruta består av flera filer. Vill du ha dem som ett lager: <b>Bearbetning → Point cloud data management → Build virtual point cloud</b> gör dem till ett enda lager.</p>
+          <p class="hint">Har du valt flera rutor: <b>Bearbetning → Point cloud data management → Build virtual point cloud</b> gör dem till ett enda lager.</p>
         </details>
       </section>
 
@@ -219,229 +231,288 @@ pre.out{margin:0;max-height:240px;overflow:auto;background:var(--ink);color:#DDE
 "use strict";
 
 /* ══════════════════════════════════════════════════════════════════════
-   Rutindex
+   Rutnät och index
 
-   Sidan använder i första hand en färdig indexfil i repot:
-       data/rutor.json   (format 2, byggs med bygg-index.py)
-   Då krävs inga API-anrop från webbläsaren, vilket gör sidan snabb och
-   oberoende av CORS och inloggning. Saknas filen, eller har den det
-   gamla formatet, frågar sidan API:et direkt i stället.
+   Sedan 2 nov 2026 levererar Lantmäteriet laserdatat i filer på
+   2,5 × 2,5 km. Kartan visar samma rutnät, så en ruta = en position i
+   katalogen. Rutans namn är dess sydvästra hörn i enheter om 100 m i
+   SWEREF 99 TM, samma som i Lantmäteriets id: "73725_8900" =
+   N 7 372 500, E 890 000.
 
-   Sedan 2 nov 2026 levererar Lantmäteriet laserdatat i 2,5 km-rutor.
-   Sidan låter fortfarande användaren välja 10 km-rutor; varje 10 km-ruta
-   består av upp till 4 × 4 filer. Nedladdningsadressen tas alltid
-   direkt från katalogens href — sidan bygger aldrig adresser själv.
+   Sidan läser i första hand data/rutor.json (format 3, byggs med
+   bygg-index.py). Saknas filen, eller har den ett äldre format, frågar
+   sidan API:et direkt; då går rutorna inte att färga i förväg.
+
+   Nedladdningsadressen tas alltid från katalogens href. Sidan bygger
+   aldrig adresser själv.
+
+   Zoomnivåer:
+     < 6        ingenting ritas
+     6 – 9      översikt i 10 km-block, färgade efter senaste året i
+                blocket. Klick zoomar in.
+     ≥ 10       klickbara 2,5 km-rutor, färgade efter senaste skanningsår
    ══════════════════════════════════════════════════════════════════════ */
 var INDEX_URL = "data/rutor.json";
 var API       = "https://api.lantmateriet.se/stac-hojd/v1";
 var COLL      = "dsm-skoglig-copc";
 var DL_BASE   = "https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/";
-var CELL      = 10000;
-var EST_BYTES = 1.7e9;
+var TILE      = 2500;     // meter, en ruta = en fil
+var BLOCK     = 10000;    // meter, översikten vid låg zoom
+var TILE_ZOOM = 10;       // från denna zoom går rutorna att klicka på
+var BLOCK_ZOOM = 6;
+var EST_BYTES = 1.1e8;    // skattning per ruta när storleken är okänd
+var MAX_DRAG  = 400;      // max antal rutor i en dragning (~40 GB)
+
+// Färgerna räknas från det nyaste året som finns i indexet, inte från
+// fasta årtal: nyaste året är alltid mörkblått, året före lite ljusare
+// och så vidare. Allt äldre än paletten räcker till får den ljusaste
+// färgen ("… el. tidigare"). Inga röda eller rosa toner, så att de valda
+// rutorna (magenta) alltid syns.
+var PALETTE = ["#2B4276", "#2C5A80", "#2E7283", "#3D8C80", "#5BA47C",
+               "#82B87A", "#ACC97F", "#D3D58E", "#E9D9A6"];   // nyast → äldst
+var maxYear = new Date().getFullYear();   // ersätts med indexets nyaste år
+function yearStep(y) { return Math.min(PALETTE.length - 1, Math.max(0, maxYear - y)); }
+function yearColor(y) { return PALETTE[yearStep(y)]; }
 
 proj4.defs("EPSG:3006",
   "+proj=utm +zone=33 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
 var toSweref = proj4("EPSG:4326", "EPSG:3006");
 var toWgs    = proj4("EPSG:3006", "EPSG:4326");
 
-var index    = null;    // { "627_57": [{o,d,s}, ...] }
+var index    = null;    // { "73725_8900": [{o,d,s,h}, ...] }, nyast först
+var blocks   = null;    // { "737_89": senaste år i blocket }
 var source   = "none";  // "index" | "api"
-var chosen   = {};      // nyckel -> { key, entries:[{o,d,s},...], older }
+var chosen   = {};      // nyckel -> { key, entries:[{o,d,s,h}], older }
 var dragMode = false;
 
 /* ── karta ──────────────────────────────────────────────────────────── */
-var map = L.map("map", { zoomControl:true, minZoom:4 }).setView([59.276, 18.002], 9);
+// boxZoom av: Shift-klick används för att välja ett helt 10 km-block.
+var map = L.map("map", { zoomControl:true, minZoom:4, boxZoom:false })
+           .setView([59.276, 18.002], 9);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
   { maxZoom:19, attribution:"© OpenStreetMap" }).addTo(map);
 
+// Canvas i stället för SVG: vid zoom 10 kan över tusen rutor synas samtidigt.
+var renderer  = L.canvas({ padding: 0.3 });
 var gridLayer = L.layerGroup().addTo(map);
 var pickLayer = L.layerGroup().addTo(map);
 var dragLayer = L.layerGroup().addTo(map);
 
-function cellRing(e0, n0) {
-  var pts = [], i, S = 4;
-  for (i = 0; i <= S; i++) pts.push([e0 + CELL*i/S, n0]);
-  for (i = 1; i <= S; i++) pts.push([e0 + CELL, n0 + CELL*i/S]);
-  for (i = 1; i <= S; i++) pts.push([e0 + CELL - CELL*i/S, n0 + CELL]);
-  for (i = 1; i <= S; i++) pts.push([e0, n0 + CELL - CELL*i/S]);
-  return pts.map(function (p) { var c = toWgs.forward(p); return [c[1], c[0]]; });
+/* ── geometri ───────────────────────────────────────────────────────── */
+function squareRing(e0, n0, size) {
+  return [[e0,n0],[e0+size,n0],[e0+size,n0+size],[e0,n0+size]].map(function (p) {
+    var c = toWgs.forward(p); return [c[1], c[0]];
+  });
 }
-function keyOf(e, n) { return (n / CELL) + "_" + (e / CELL); }
+function keyOf(e, n)  { return (n / 100) + "_" + (e / 100); }
 function originOf(key) {
   var p = key.split("_");
-  return [ +p[1] * CELL, +p[0] * CELL ];
+  return [ +p[1] * 100, +p[0] * 100 ];   // [E, N]
 }
-function cellAt(latlng) {
+function blockOf(key) {
+  var o = originOf(key);
+  return Math.floor(o[1] / BLOCK) + "_" + Math.floor(o[0] / BLOCK);
+}
+function snap(v, size) { return Math.floor(v / size) * size; }
+function tileAt(latlng) {
   var s = toSweref.forward([latlng.lng, latlng.lat]);
-  return keyOf(Math.floor(s[0] / CELL) * CELL, Math.floor(s[1] / CELL) * CELL);
+  return keyOf(snap(s[0], TILE), snap(s[1], TILE));
 }
-function cellsInBounds(b) {
+// Hörnen för alla rutor av storleken size inom kartutsnittet b.
+// Returnerar null om de skulle bli fler än max.
+function squaresInBounds(b, size, max) {
   var cs = [[b.getWest(),b.getSouth()],[b.getEast(),b.getSouth()],
             [b.getEast(),b.getNorth()],[b.getWest(),b.getNorth()]]
              .map(function (c) { return toSweref.forward(c); });
   var es = cs.map(function (c) { return c[0]; }), ns = cs.map(function (c) { return c[1]; });
-  var e0 = Math.floor(Math.min.apply(null,es)/CELL)*CELL, e1 = Math.ceil(Math.max.apply(null,es)/CELL)*CELL;
-  var n0 = Math.floor(Math.min.apply(null,ns)/CELL)*CELL, n1 = Math.ceil(Math.max.apply(null,ns)/CELL)*CELL;
+  var e0 = snap(Math.min.apply(null, es), size), e1 = Math.ceil(Math.max.apply(null, es) / size) * size;
+  var n0 = snap(Math.min.apply(null, ns), size), n1 = Math.ceil(Math.max.apply(null, ns) / size) * size;
+  if (((e1 - e0) / size) * ((n1 - n0) / size) > max) return null;
   var out = [];
-  for (var n = n0; n < n1; n += CELL)
-    for (var e = e0; e < e1; e += CELL) out.push([e, n]);
+  for (var n = n0; n < n1; n += size)
+    for (var e = e0; e < e1; e += size) out.push([e, n]);
   return out;
 }
 
+function newestYear(key) {
+  var es = index && index[key];
+  return es && es.length ? +es[0].d.slice(0, 4) : null;
+}
+
+/* ── rita rutnätet ──────────────────────────────────────────────────── */
 function drawGrid() {
   gridLayer.clearLayers();
-  if (map.getZoom() < 8) return;
-  var cells = cellsInBounds(map.getBounds());
-  if (cells.length > 400) return;
-  var label = cells.length <= 48;
+  var z = map.getZoom(), b = map.getBounds();
 
-  cells.forEach(function (c) {
-    var key = keyOf(c[0], c[1]);
-    var has = index ? !!index[key] : true;
-    L.polygon(cellRing(c[0], c[1]), {
-      color: "#12161A", weight: has ? 0.8 : 0.5, opacity: has ? 0.35 : 0.15,
-      fill: !!(index && has), fillColor: "#6E7F63", fillOpacity: 0.05,
-      dashArray: has ? "2 4" : "1 5", interactive: false
-    }).addTo(gridLayer);
+  if (z >= TILE_ZOOM) {
+    var cells = squaresInBounds(b, TILE, 6000);
+    if (!cells) return;
+    var label = z >= 13;
+    cells.forEach(function (c) {
+      var key = keyOf(c[0], c[1]);
+      var y = newestYear(key);
+      var has = index ? y !== null : true;   // utan index: rita alla rutor
+      L.polygon(squareRing(c[0], c[1], TILE), {
+        renderer: renderer, interactive: false,
+        color: "#12161A", weight: has ? 0.6 : 0.4, opacity: has ? 0.35 : 0.12,
+        fill: !!y, fillColor: y ? yearColor(y) : null, fillOpacity: 0.45
+      }).addTo(gridLayer);
+      if (label && has) {
+        var m = toWgs.forward([c[0] + TILE/2, c[1] + TILE/2]);
+        L.marker([m[1], m[0]], { interactive:false, icon: L.divIcon({
+          className:"gridlabel", html:key, iconSize:[70,12], iconAnchor:[35,6]
+        })}).addTo(gridLayer);
+      }
+    });
+    return;
+  }
 
-    if (label && has) {
-      var m = toWgs.forward([c[0] + CELL/2, c[1] + CELL/2]);
-      L.marker([m[1], m[0]], { interactive:false, icon: L.divIcon({
-        className:"gridlabel", html:key, iconSize:[58,12], iconAnchor:[29,6]
-      })}).addTo(gridLayer);
-    }
-  });
+  if (z >= BLOCK_ZOOM && blocks) {
+    var bl = squaresInBounds(b, BLOCK, 30000);
+    if (!bl) return;
+    bl.forEach(function (c) {
+      var y = blocks[(c[1] / BLOCK) + "_" + (c[0] / BLOCK)];
+      if (!y) return;
+      L.polygon(squareRing(c[0], c[1], BLOCK), {
+        renderer: renderer, interactive: false, stroke: false,
+        fillColor: yearColor(y), fillOpacity: 0.45
+      }).addTo(gridLayer);
+    });
+  }
 }
-map.on("moveend zoomend", drawGrid);
+map.on("moveend zoomend", function () { drawGrid(); if (!dragMode) tipReset(); });
 
+/* ── teckenförklaring ───────────────────────────────────────────────── */
+function addLegend() {
+  var present = {};
+  Object.keys(index).forEach(function (k) { present[yearStep(newestYear(k))] = true; });
+  var last = PALETTE.length - 1;
+  var ctl = L.control({ position: "bottomleft" });
+  ctl.onAdd = function () {
+    var div = L.DomUtil.create("div", "legend");
+    div.innerHTML = "<b>Senast skannad</b>" +
+      PALETTE.map(function (c, i) {
+        if (!present[i]) return "";
+        return "<div class='row'><span class='sw' style='background:" + c + "'></span>" +
+               (maxYear - i) + (i === last ? " el. tidigare" : "") + "</div>";
+      }).join("") +
+      "<div class='sep'></div><div class='row'><span class='sw pick'></span>Vald ruta</div>";
+    L.DomEvent.disableClickPropagation(div);
+    return div;
+  };
+  ctl.addTo(map);
+}
+
+/* ── meddelanden ────────────────────────────────────────────────────── */
 function note(kind, html) {
   document.getElementById("srcmsg").innerHTML =
     '<div class="msg ' + kind + '">' + html + "</div>";
 }
 function tip(html) { document.getElementById("tip").innerHTML = html; }
-function tipReset() { tip("Zooma in så syns rutnätet. Varje ruta är 10 × 10 km."); }
+function tipReset() {
+  tip(map.getZoom() < TILE_ZOOM
+    ? "<b>Zooma in</b> (eller klicka på kartan) så syns rutorna och går att välja."
+    : "Färgen visar när rutan senast skannades. <b>Shift-klick</b> väljer ett helt " +
+      "block på 10 × 10 km (16 rutor).");
+}
 
 /* ── ladda index ────────────────────────────────────────────────────── */
 fetch(INDEX_URL, { cache: "no-cache" })
   .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(function (j) {
-    // Index i gammalt format (10 km-filer, före nov 2026) pekar på borttagna
-    // filer. Använd API:et hellre än att visa döda länkar.
-    if (j.format !== 2) throw new Error("gammalt indexformat");
+    // Äldre format pekar på borttagna 10 km-filer. Fråga hellre API:et.
+    if (j.format !== 3) throw new Error("äldre indexformat");
     index  = j.rutor;
     source = "index";
+    maxYear = Object.keys(index).reduce(function (m, k) {
+      return Math.max(m, newestYear(k));
+    }, 0);
+    blocks = {};
+    Object.keys(index).forEach(function (k) {
+      var bk = blockOf(k), y = newestYear(k);
+      if (!blocks[bk] || y > blocks[bk]) blocks[bk] = y;
+    });
+    addLegend();
     note("ok", "Rutlistan i repot är uppdaterad <b>" + (j.uppdaterad || "okänt datum") +
-               "</b> och innehåller " + Object.keys(index).length +
-               " rutor (" + (j.filer || "?") + " filer). Sidan gör inga anrop till Lantmäteriet förrän du hämtar en fil.");
+               "</b> och innehåller " + Object.keys(index).length.toLocaleString("sv-SE") +
+               " rutor. Sidan gör inga anrop till Lantmäteriet förrän du hämtar en fil.");
     drawGrid();
   })
   .catch(function () {
     source = "api";
-    note("warn", "<b>Ingen färdig rutlista i repot.</b> Sidan frågar Lantmäteriets API " +
-                 "direkt i stället, vilket kan misslyckas beroende på hur servern svarar. " +
-                 "Bygg <span style='font-family:var(--mono)'>data/rutor.json</span> med " +
-                 "bygg-index.py för att göra sidan oberoende av det.");
+    note("warn", "<b>Ingen aktuell rutlista i repot.</b> Sidan frågar Lantmäteriets API " +
+                 "direkt i stället, vilket kan misslyckas beroende på hur servern svarar, " +
+                 "och rutorna kan inte färgas. Bygg <span style='font-family:var(--mono)'>" +
+                 "data/rutor.json</span> med bygg-index.py.");
     drawGrid();
   });
 
 /* ── slå upp filer ──────────────────────────────────────────────────── */
-/*
-   En 10 km-ruta består av upp till 16 delrutor på 2,5 × 2,5 km. Samma
-   delruta kan finnas från flera skanningar. För varje delruta väljs det
-   nyaste datumet; finns flera filer med det datumet (olika
-   skanningsområden) tas alla med.
-
-   Delrutor som helt saknas räknas, så användaren kan varnas för rutor
-   som bara delvis har data (kust, riksgräns, fjällkedjan eller ännu
-   inte skannat).
-*/
-var SUBS_PER_CELL = 16;
-
-function buildCoverage(entries) {
-  var bySub = {}, subs = [];
-  entries.forEach(function (e) {
-    if (!bySub[e.t]) { bySub[e.t] = []; subs.push(e.t); }
-    bySub[e.t].push(e);
-  });
-  subs.sort();
-
-  var files = [];
-  subs.forEach(function (t) {
-    var newest = bySub[t].reduce(function (m, e) { return e.d > m ? e.d : m; }, "");
-    bySub[t].forEach(function (e) { if (e.d === newest) files.push(e); });
-  });
-  return { files: files, missing: Math.max(0, SUBS_PER_CELL - subs.length) };
+// Samma ruta kan ha skannats flera gånger. Ta det nyaste datumet; finns
+// flera filer med det datumet (olika skanningsområden) tas alla med.
+function newestFiles(entries) {
+  var d0 = entries[0].d;
+  return entries.filter(function (e) { return e.d === d0; });
 }
 
 async function resolve(keys) {
+  var byKey = {};
   if (source === "index") {
-    var hits = [], miss = [];
-    keys.forEach(function (k) {
-      if (index[k] && index[k].length) {
-        var cov = buildCoverage(index[k]);
-        hits.push({ key:k, entries:cov.files, missing:cov.missing, older: index[k].length - cov.files.length });
-      } else miss.push(k);
+    keys.forEach(function (k) { if (index[k] && index[k].length) byKey[k] = index[k]; });
+  } else {
+    var polys = keys.map(function (k) {
+      var o = originOf(k);
+      var r = squareRing(o[0], o[1], TILE).map(function (ll) { return [ll[1], ll[0]]; });
+      r.push(r[0]);
+      return [r];
     });
-    return { hits: hits, miss: miss };
+    var res = await fetch(API + "/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        collections: [COLL],
+        intersects: { type:"MultiPolygon", coordinates: polys },
+        limit: 5000
+      })
+    });
+    if (!res.ok) throw new Error("servern svarade " + res.status);
+    var json = await res.json();
+    (json.features || []).forEach(function (f) {
+      var m = /^([0-9a-z]+)-(\d+)_(\d+)_25$/i.exec(f.id);
+      var data = f.assets && f.assets.data;
+      if (!m || !data || !data.href) return;
+      var k = (+m[2]) + "_" + (+m[3]);
+      if (keys.indexOf(k) === -1) return;   // grannrutor som bara nuddar kanten
+      (byKey[k] = byKey[k] || []).push({
+        o: m[1].toLowerCase(),
+        d: String((f.properties && f.properties.datetime) || "").slice(0, 10),
+        s: data["file:size"] || 0,
+        h: data.href
+      });
+    });
+    Object.keys(byKey).forEach(function (k) {
+      byKey[k].sort(function (a, b) { return a.d < b.d ? 1 : a.d > b.d ? -1 : 0; });
+    });
   }
 
-  var polys = keys.map(function (k) {
-    var o = originOf(k);
-    var ring = cellRing(o[0], o[1]).map(function (ll) { return [ll[1], ll[0]]; });
-    ring.push(ring[0]);
-    return [ring];
-  });
-
-  var res = await fetch(API + "/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      collections: [COLL],
-      intersects: { type:"MultiPolygon", coordinates: polys },
-      limit: 5000
-    })
-  });
-  if (!res.ok) throw new Error("servern svarade " + res.status);
-  var json = await res.json();
-
-  var byKey = {};
-  (json.features || []).forEach(function (f) {
-    var m = /^([0-9a-z]+)-(\d+)_(\d+)_25$/i.exec(f.id);
-    var data = f.assets && f.assets.data;
-    if (!m || !data || !data.href) return;
-    var n0 = +m[2] * 100, e0 = +m[3] * 100;
-    var k = Math.floor(n0 / CELL) + "_" + Math.floor(e0 / CELL);
-    if (keys.indexOf(k) === -1) return;   // grannrutor som bara nuddar kanten
-    (byKey[k] = byKey[k] || []).push({
-      t: String(Math.floor((n0 % CELL) / 2500)) + String(Math.floor((e0 % CELL) / 2500)),
-      o: m[1].toLowerCase(),
-      d: String((f.properties && f.properties.datetime) || "").slice(0, 10),
-      s: data["file:size"] || 0,
-      h: data.href
-    });
-  });
-
-  var h = [], ms = [];
+  var hits = [], miss = [];
   keys.forEach(function (k) {
     if (byKey[k]) {
-      var cov = buildCoverage(byKey[k]);
-      h.push({ key:k, entries:cov.files, missing:cov.missing, older: byKey[k].length - cov.files.length });
-    } else ms.push(k);
+      var files = newestFiles(byKey[k]);
+      hits.push({ key:k, entries:files, older: byKey[k].length - files.length });
+    } else miss.push(k);
   });
-  return { hits: h, miss: ms };
+  return { hits: hits, miss: miss };
 }
 
 // Adressen kommer från katalogen. I indexet är den kortad till delen
 // efter DL_BASE; från API:et är den hel.
-function hrefFor(key, entry) {
+function hrefFor(entry) {
   return /^https?:\/\//.test(entry.h) ? entry.h : DL_BASE + entry.h;
 }
 function fileLabel(entry) {
-  return entry.h.split("/").pop().replace(/^y/, "").replace(/\.copc\.laz$/, "");
+  return entry.h.split("/").pop().replace(/\.copc\.laz$/, "");
 }
-
-// Totalt antal bytes för en ruta. Om ingen fil har känd storlek används
-// EST_BYTES som en grov skattning för hela rutan (inte per fil).
 function keyBytes(c) {
   var sum = c.entries.reduce(function (s, e) { return s + (e.s || 0); }, 0);
   return sum > 0 ? sum : EST_BYTES;
@@ -449,17 +520,23 @@ function keyBytes(c) {
 
 function flash(key, color) {
   var o = originOf(key);
-  var l = L.polygon(cellRing(o[0], o[1]), {
-    color: color, weight: 2, fillColor: color, fillOpacity: 0.2
+  var l = L.polygon(squareRing(o[0], o[1], TILE), {
+    renderer: renderer, interactive: false,
+    color: color, weight: 2, fillColor: color, fillOpacity: 0.25
   }).addTo(map);
   setTimeout(function () { map.removeLayer(l); }, 1100);
 }
 
-/* ── klicka för att välja ───────────────────────────────────────────── */
+/* ── välja rutor ────────────────────────────────────────────────────── */
 async function toggle(key) {
   if (chosen[key]) { delete chosen[key]; render(); return; }
-
-  tip("Slår upp filnamnet …");
+  if (source === "index" && !index[key]) {
+    tip("Ruta <b>" + key + "</b> har ingen laserdata. Området är inte skannat, " +
+        "eller ännu inte publicerat.");
+    flash(key, "#8A8A80");
+    return;
+  }
+  tip("Slår upp filen …");
   try {
     var r = await resolve([key]);
     if (!r.hits.length) {
@@ -469,24 +546,58 @@ async function toggle(key) {
       return;
     }
     chosen[key] = r.hits[0];
-    var miss = r.hits[0].missing;
-    if (miss > 0) {
-      tip("Ruta <b>" + key + "</b> tillagd, men " + miss + " av 16 delrutor saknar " +
-          "laserdata. Troligen ligger en del av rutan i havet, vid riksgränsen eller " +
-          "i fjällkedjan — kolla <b>Är området skannat?</b> nedan.");
-    } else {
-      tipReset();
-    }
+    tipReset();
     render();
   } catch (e) {
-    tip("Kunde inte slå upp filnamnet: " + e.message +
+    tip("Kunde inte slå upp filen: " + e.message +
         ". Se <b>Länklista och avancerat</b> längst ner.");
   }
 }
 
+// Lägger till flera rutor på en gång. Rutor utan data hoppas över.
+async function addMany(keys, what) {
+  if (source === "index") keys = keys.filter(function (k) { return index[k]; });
+  if (!keys.length) { tip("Det finns ingen laserdata i " + what + "."); return; }
+  if (keys.length > MAX_DRAG) {
+    tip(what.charAt(0).toUpperCase() + what.slice(1) + " rymmer <b>" + keys.length +
+        " rutor</b> med data, ungefär " + Math.round(keys.length * EST_BYTES / 1e9) +
+        " GB. Välj ett mindre område (högst " + MAX_DRAG + " rutor åt gången).");
+    return;
+  }
+  tip("Slår upp " + keys.length + " rutor …");
+  try {
+    var r = await resolve(keys);
+    r.hits.forEach(function (h) { chosen[h.key] = h; });
+    var msg = "<b>" + r.hits.length + "</b> rutor tillagda.";
+    if (r.miss.length) msg += " " + r.miss.length + " rutor i området saknar laserdata.";
+    tip(msg);
+    render();
+  } catch (err) {
+    tip("Kunde inte slå upp filerna: " + err.message + ".");
+  }
+}
+
+// Shift-klick: alla 16 rutor i 10 km-blocket. Är alla redan valda tas de bort.
+function toggleBlock(latlng) {
+  var s = toSweref.forward([latlng.lng, latlng.lat]);
+  var e0 = snap(s[0], BLOCK), n0 = snap(s[1], BLOCK), keys = [];
+  for (var n = n0; n < n0 + BLOCK; n += TILE)
+    for (var e = e0; e < e0 + BLOCK; e += TILE) keys.push(keyOf(e, n));
+  var withData = source === "index" ? keys.filter(function (k) { return index[k]; }) : keys;
+  if (withData.length && withData.every(function (k) { return chosen[k]; })) {
+    withData.forEach(function (k) { delete chosen[k]; });
+    render();
+    tip("Blocket borttaget.");
+    return;
+  }
+  addMany(keys, "blocket");
+}
+
 map.on("click", function (e) {
   if (dragMode) return;
-  toggle(cellAt(e.latlng));
+  if (map.getZoom() < TILE_ZOOM) { map.setView(e.latlng, TILE_ZOOM + 1); return; }
+  if (e.originalEvent && e.originalEvent.shiftKey) toggleBlock(e.latlng);
+  else toggle(tileAt(e.latlng));
 });
 
 /* ── markera flera genom att dra ────────────────────────────────────── */
@@ -495,7 +606,7 @@ dBtn.onclick = function () {
   dragMode = !dragMode;
   dBtn.setAttribute("aria-pressed", dragMode);
   map.dragging[dragMode ? "disable" : "enable"]();
-  if (dragMode) tip("Dra över kartan för att välja alla rutor inom området.");
+  if (dragMode) tip("Dra över kartan för att välja alla rutor med data inom området.");
   else tipReset();
 };
 
@@ -508,35 +619,14 @@ map.on("mousemove", function (e) {
     color:"#C0356B", weight:1.5, dashArray:"4 3", fillOpacity:0.06
   }).addTo(dragLayer);
 });
-map.on("mouseup", async function (e) {
+map.on("mouseup", function (e) {
   if (!dragMode || !dStart) return;
   var b = L.latLngBounds(dStart, e.latlng);
   dStart = null; dBox = null; dragLayer.clearLayers();
   if (b.getNorth() - b.getSouth() < 1e-5) return;
-
-  var keys = cellsInBounds(b).map(function (c) { return keyOf(c[0], c[1]); });
-  if (keys.length > 120) {
-    tip("Det området rymmer <b>" + keys.length + " rutor</b>, ungefär " +
-        Math.round(keys.length * 1.7) + " GB. Välj ett mindre område.");
-    return;
-  }
-
-  tip("Slår upp filnamn för " + keys.length + " rutor …");
-  try {
-    var r = await resolve(keys);
-    r.hits.forEach(function (h) { chosen[h.key] = h; });
-    var nOfullstandig = r.hits.filter(function (h) {
-      return h.missing > 0;
-    }).length;
-    var msg = "<b>" + r.hits.length + "</b> rutor tillagda.";
-    if (r.miss.length) msg += " " + r.miss.length + " av rutorna i området saknar laserdata.";
-    if (nOfullstandig) msg += " " + nOfullstandig + " av dem har bara delvis data " +
-      "(kust, riksgräns eller fjällkedjan) — se listan nedan.";
-    tip(msg);
-    render();
-  } catch (err) {
-    tip("Kunde inte slå upp filnamnen: " + err.message + ".");
-  }
+  var sq = squaresInBounds(b, TILE, 20000);
+  if (!sq) { tip("Området är för stort. Välj ett mindre område."); return; }
+  addMany(sq.map(function (c) { return keyOf(c[0], c[1]); }), "området");
 });
 
 document.getElementById("tool-clear").onclick = function () {
@@ -565,12 +655,14 @@ function render() {
   document.getElementById("tallySize").innerHTML =
     (est ? "≈" : "") + fmt(gbTot, gbTot < 10 ? 1 : 0) + "<small> GB</small>";
 
+  // Valda rutor: vit kant under en magenta kant, så de syns mot alla årsfärger.
   pickLayer.clearLayers();
   keys.forEach(function (k) {
-    var o = originOf(k);
-    L.polygon(cellRing(o[0], o[1]), {
-      color:"#C0356B", weight:1.5, fillColor:"#C0356B", fillOpacity:0.22
-    }).addTo(pickLayer).bindTooltip(k, { direction:"center", className:"gridlabel" });
+    var o = originOf(k), ring = squareRing(o[0], o[1], TILE);
+    L.polygon(ring, { renderer: renderer, interactive: false,
+      color:"#fff", weight:4, opacity:0.9, fill:false }).addTo(pickLayer);
+    L.polygon(ring, { renderer: renderer, interactive: false,
+      color:"#C0356B", weight:2, fillColor:"#C0356B", fillOpacity:0.6 }).addTo(pickLayer);
   });
 
   var box = document.getElementById("list");
@@ -583,32 +675,23 @@ function render() {
   }
 
   box.innerHTML = "<ul class='tiles'>" + keys.map(function (k) {
-    var c = chosen[k];
-    var multi = c.entries.length > 1;
-    var totalSize = keyBytes(c);
-    var incomplete = c.missing > 0;
-
-    var meta = (c.entries[0] ? c.entries[0].d : "okänt datum") +
+    var c = chosen[k], multi = c.entries.length > 1, size = keyBytes(c);
+    var meta = c.entries[0].d +
       (multi ? " · " + c.entries.length + " filer" : "") +
-      (incomplete ? " · <span style='color:var(--warn)'>" + c.missing +
-        " av 16 delrutor saknas</span>" : "");
-
+      (c.older ? " · " + c.older + " äldre skanning" + (c.older > 1 ? "ar" : "") : "");
     var head =
       "<span class='id'>" + k + "<em>" + meta + "</em></span>" +
-      "<span class='sz'>" + (totalSize ? fmt(totalSize/1e9, 2) + " GB" : "≈1,7 GB") + "</span>" +
-      (multi ? "" :
-        "<a class='dl' href='" + hrefFor(k, c.entries[0]) + "' target='_blank' rel='noopener'>Hämta</a>") +
-      "<button class='x' data-k='" + k + "' title='Ta bort rutan (alla filer)'>×</button>";
-
+      "<span class='sz'>" + fmt(size/1e9, 2) + " GB</span>" +
+      (multi ? "" : "<a class='dl' href='" + hrefFor(c.entries[0]) +
+                    "' target='_blank' rel='noopener'>Hämta</a>") +
+      "<button class='x' data-k='" + k + "' title='Ta bort rutan'>×</button>";
     var fileList = multi
       ? "<div class='filelist'>" + c.entries.map(function (e) {
-          return "<div class='filerow'>" +
-            "<span class='fsz'>" + (e.s ? fmt(e.s/1e9, 2) + " GB" : "≈okänd storlek") + " · " + e.d + "</span>" +
-            "<a class='dl' href='" + hrefFor(k, e) + "' target='_blank' rel='noopener'>Hämta " + fileLabel(e) + "</a>" +
-          "</div>";
+          return "<div class='filerow'><span class='fsz'>" +
+            (e.s ? fmt(e.s/1e9, 2) + " GB" : "okänd storlek") + " · " + e.o + "</span>" +
+            "<a class='dl' href='" + hrefFor(e) + "' target='_blank' rel='noopener'>Hämta</a></div>";
         }).join("") + "</div>"
       : "";
-
     return "<li>" + head + fileList + "</li>";
   }).join("") + "</ul>";
 
@@ -624,32 +707,28 @@ function render() {
 
   document.getElementById("dlsec").hidden = false;
   document.getElementById("dlall").textContent =
-    "Ladda ned alla filer" + (fileCount > keys.length ? " (" + fileCount + " st)" : "");
+    "Ladda ned alla filer (" + fileCount + " st)";
   document.getElementById("urlbox").textContent =
     keys.reduce(function (lines, k) {
-      chosen[k].entries.forEach(function (e) { lines.push(hrefFor(k, e)); });
+      chosen[k].entries.forEach(function (e) { lines.push(hrefFor(e)); });
       return lines;
     }, []).join("\n");
 }
 
 /* ── ladda ned allt ─────────────────────────────────────────────────── */
 document.getElementById("dlall").onclick = function () {
-  var keys = Object.keys(chosen).sort();
-  if (!keys.length) return;
-
   var files = [];
-  keys.forEach(function (k) {
-    chosen[k].entries.forEach(function (e) { files.push({ key:k, entry:e }); });
+  Object.keys(chosen).sort().forEach(function (k) {
+    chosen[k].entries.forEach(function (e) { files.push(e); });
   });
   if (!files.length) return;
 
   var btn = this;
   btn.disabled = true;
-
   files.forEach(function (f, i) {
     setTimeout(function () {
       var a = document.createElement("a");
-      a.href = hrefFor(f.key, f.entry);
+      a.href = hrefFor(f);
       a.target = "_blank";
       a.rel = "noopener";
       document.body.appendChild(a);
@@ -657,10 +736,7 @@ document.getElementById("dlall").onclick = function () {
       a.remove();
       btn.textContent = "Startar " + (i + 1) + " av " + files.length + " …";
       if (i === files.length - 1) {
-        setTimeout(function () {
-          btn.disabled = false;
-          render();
-        }, 2500);
+        setTimeout(function () { btn.disabled = false; render(); }, 2500);
       }
     }, i * 2000);
   });
@@ -677,6 +753,7 @@ document.getElementById("copy").onclick = function () {
     });
 };
 
+tipReset();
 drawGrid();
 render();
 
