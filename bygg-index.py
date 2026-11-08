@@ -1,53 +1,54 @@
 #!/usr/bin/env python3
 """
-Bygger docs/data/rutor.json — den rutlista sidan använder för att slå upp
-filer utan att fråga Lantmäteriets API i webbläsaren.
+Bygger docs/data/rutor.json — den rutlista sidan använder för att färga
+kartan och slå upp filer utan att fråga Lantmäteriets API i webbläsaren.
 
-    pip install requests
-    python3 bygg-index.py                          # utan inloggning
-    LM_USER=... LM_PASS=... python3 bygg-index.py  # med, om API:et kräver det
+    uv run --with requests python bygg-index.py
+    (med inloggning: sätt LM_USER och LM_PASS först, om API:et kräver det)
 
 Bakgrund (november 2026)
 ------------------------
 Lantmäteriet har ersatt de gamla 10 km-filerna i dsm-skoglig-copc med
-2,5 km-filer. Id och filnamn ser nu ut så här:
+filer på 2,5 × 2,5 km. Id och nedladdningsadress ser ut så här:
 
     id:   26h019-73725_8900_25
     href: https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/26h019/
           y26h019-73725_8900_25.copc.laz
 
   26h019      skanningsområde
-  73725_8900  rutans nedre vänstra hörn i enheter om 100 m
+  73725_8900  rutans sydvästra hörn i enheter om 100 m
               (N 7 372 500, E 890 000 i SWEREF 99 TM)
   25          rutstorlek, 25 = 2,5 km
 
-Sidan byggde tidigare nedladdningslänken själv efter ett fast mönster.
-Det slutade fungera när Lantmäteriet bytte filnamn. Nu sparas katalogens
-egen href för varje fil, så sidan aldrig behöver gissa en adress.
+Sidan visar samma rutnät som filerna, så en ruta på kartan = en position
+i katalogen. Rutans namn på kartan är "73725_8900", samma som i id:t.
 
 Utdataformat (docs/data/rutor.json)
 -----------------------------------
     {
-      "format": 2,
+      "format": 3,
       "uppdaterad": "2026-11-08",
-      "antal": 4418,          # antal 10 km-rutor
-      "filer": 98765,         # antal filer totalt
+      "antal": 98000,            # antal rutor med data
+      "filer": 112000,           # antal filer totalt
       "rutor": {
-        "737_89": [
-          {"t": "10", "o": "26h019", "d": "2026-07-16", "s": 78463831,
-           "h": "26h019/y26h019-73725_8900_25.copc.laz"}
+        "73725_8900": [
+          {"o": "26h019", "d": "2026-07-16", "s": 78463831,
+           "h": "26h019/y26h019-73725_8900_25.copc.laz"},
+          {"o": "20h026", "d": "2020-09-20", "s": 61234567,
+           "h": "20h026/y20h026-73725_8900_25.copc.laz"}
         ]
       }
     }
 
-  Nyckel = 10 km-rutan ("norr_öst" i enheter om 10 km), samma rutnät som
-           sidan ritar. Varje 10 km-ruta rymmer upp till 4 × 4 delrutor.
-  t = delrutans plats i 10 km-rutan, "rad" + "kolumn" räknat från
-      sydväst (0–3). "10" = andra raden norrut, första kolumnen.
-  o = skanningsområde
-  d = insamlingsdatum
-  s = filstorlek i byte
-  h = href relativt https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/
+Varje ruta har en lista med filer, nyaste först. Samma ruta kan ha
+skannats flera gånger, och då finns en fil per skanning. Fälten har
+korta namn för att hålla nere filstorleken:
+
+  o = skanningsområde (Lantmäteriets beteckning, t.ex. 26h019)
+  d = datum då området skannades
+  s = filens storlek i byte
+  h = nedladdningsadressen, kortad: det som står efter
+      https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/
       Ligger filen någon annanstans sparas hela adressen.
 """
 
@@ -65,7 +66,7 @@ API = "https://api.lantmateriet.se/stac-hojd/v1"
 COLLECTION = "dsm-skoglig-copc"
 PAGE = 2000                      # API:et tillåter upp till 10 000
 OUT = Path("docs/data/rutor.json")
-CELL = 10000                     # 10 km-rutan, matchar CELL i sidans JS
+TILE = 2500                      # rutstorlek i meter, matchar TILE i sidans JS
 DL_BASE = "https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/"
 
 # 26h019-73725_8900_25 → område, norr/100 m, öst/100 m, storlekskod
@@ -108,10 +109,7 @@ def short_href(href):
 
 
 rutor = defaultdict(list)
-old_format = 0
-unknown_id = 0
-no_href = 0
-bbox_mismatch = 0
+old_format = unknown_id = no_href = bbox_mismatch = 0
 size_codes = Counter()
 total_bytes = 0
 
@@ -127,12 +125,11 @@ for feats in pages():
                 unknown_id += 1
             continue
 
-        area, n100, e100, code = m.group(1).lower(), int(m.group(2)), int(m.group(3)), m.group(4)
+        area, code = m.group(1).lower(), m.group(4)
+        n100, e100 = str(int(m.group(2))), str(int(m.group(3)))  # utan inledande nollor, som sidan
         size_codes[code] += 1
         if code != "25":
-            # Bara 2,5 km-rutor väntas. Andra storlekar räknas men tas inte med,
-            # eftersom sidans indelning i 4 × 4 delrutor då inte stämmer.
-            continue
+            continue  # bara 2,5 km-rutor passar sidans rutnät
 
         data = (f.get("assets") or {}).get("data") or {}
         href = data.get("href")
@@ -140,19 +137,15 @@ for feats in pages():
             no_href += 1
             continue
 
-        n0, e0 = n100 * 100, e100 * 100
         # Kontrollera tolkningen av id:t mot katalogens egen proj:bbox.
         pb = data.get("proj:bbox") or (f.get("properties") or {}).get("proj:bbox")
-        if pb and len(pb) == 4 and (round(pb[0]) != e0 or round(pb[1]) != n0):
+        if pb and len(pb) == 4 and (round(pb[0]) != int(e100) * 100
+                                    or round(pb[1]) != int(n100) * 100):
             bbox_mismatch += 1
 
-        key = "%d_%d" % (n0 // CELL, e0 // CELL)
-        sub = "%d%d" % ((n0 % CELL) // 2500, (e0 % CELL) // 2500)
         size = data.get("file:size") or 0
         total_bytes += size
-
-        rutor[key].append({
-            "t": sub,
+        rutor["%s_%s" % (n100, e100)].append({
             "o": area,
             "d": str((f.get("properties") or {}).get("datetime") or "")[:10],
             "s": size,
@@ -163,14 +156,12 @@ if not rutor:
     sys.exit("Inga rutor hittades — kontrollera nätverk, behörighet och id-format "
              "(%d i gammalt 10 km-format, %d okända)." % (old_format, unknown_id))
 
-# Sortera: delruta, sedan nyast först, så sidan kan ta första träffen per delruta.
 for entries in rutor.values():
-    entries.sort(key=lambda e: e["d"], reverse=True)
-    entries.sort(key=lambda e: e["t"])
+    entries.sort(key=lambda e: e["d"], reverse=True)   # nyast först
 
 files = sum(len(v) for v in rutor.values())
 payload = {
-    "format": 2,
+    "format": 3,
     "uppdaterad": date.today().isoformat(),
     "antal": len(rutor),
     "filer": files,
@@ -182,44 +173,26 @@ OUT.write_text(json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
 
 # ── sammanfattning ─────────────────────────────────────────────────────
 print("")
-print("%d rutor (10 km), %d filer, %.1f TB totalt"
-      % (len(rutor), files, total_bytes / 1e12))
+print("%d rutor, %d filer, %.1f TB totalt" % (len(rutor), files, total_bytes / 1e12))
 print("Skrev %s (%.1f MB)" % (OUT, OUT.stat().st_size / 1e6))
-
-print("")
 print("Storlekskoder i katalogen: %s" % dict(size_codes))
 if old_format:
-    print("VARNING: %d items i gammalt 10 km-format hoppades över." % old_format)
-    print("  Filerna togs bort 2 nov 2026. Kontrollera ett av dem med curl om antalet är stort.")
+    print("VARNING: %d items i gammalt 10 km-format hoppades över "
+          "(filerna togs bort 2 nov 2026)." % old_format)
 if unknown_id:
     print("VARNING: %d items med okänt id-format hoppades över." % unknown_id)
 if no_href:
-    print("VARNING: %d items saknade assets.data.href och hoppades över." % no_href)
+    print("VARNING: %d items saknade nedladdningsadress och hoppades över." % no_href)
 if bbox_mismatch:
-    print("VARNING: %d items där id:t inte stämmer med proj:bbox." % bbox_mismatch)
-    print("  Tolkningen av id-formatet kan vara fel — kontrollera innan du publicerar.")
+    print("VARNING: %d filer där id:t inte stämmer med proj:bbox — "
+          "kontrollera innan du publicerar." % bbox_mismatch)
 else:
     print("Id-tolkningen stämmer med proj:bbox för alla filer.")
 
-# Hur ser rutorna ut? Hjälper att avgöra om sidans logik (nyaste filen per
-# delruta) räcker.
-full = sum(1 for v in rutor.values() if len({e["t"] for e in v}) == 16)
-multi_date = 0
-same_date_multi = 0
-for v in rutor.values():
-    per_sub = defaultdict(list)
-    for e in v:
-        per_sub[e["t"]].append(e)
-    for es in per_sub.values():
-        if len({e["d"] for e in es}) > 1:
-            multi_date += 1
-        newest = es[0]["d"]
-        if sum(1 for e in es if e["d"] == newest) > 1:
-            same_date_multi += 1
-
+years = Counter(v[0]["d"][:4] for v in rutor.values())
 print("")
-print("%d av %d rutor har alla 16 delrutor (resten ligger vid kust, gräns eller fjäll)."
-      % (full, len(rutor)))
-print("%d delrutor finns från flera datum (sidan väljer det nyaste)." % multi_date)
-print("%d delrutor har flera filer med samma nyaste datum (sidan tar med alla)."
-      % same_date_multi)
+print("Senaste skanningsår per ruta (styr färgerna på kartan):")
+for y in sorted(years):
+    print("  %s: %6d rutor" % (y, years[y]))
+same_date = sum(1 for v in rutor.values() if len(v) > 1 and v[0]["d"] == v[1]["d"])
+print("%d rutor har flera filer från samma senaste datum (sidan tar med alla)." % same_date)
